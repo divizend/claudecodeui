@@ -12,6 +12,8 @@ import { useCallback, useMemo, useRef, useState } from 'react';
 import { authenticatedFetch } from '../utils/api';
 import type { LLMProvider } from '../types/app';
 
+import { compareMessagesChronologically, mergeTailMessages, readMessageTime } from './sessionMessageOrdering';
+
 // ─── NormalizedMessage (mirrors server/adapters/types.js) ────────────────────
 
 export type MessageKind =
@@ -149,11 +151,6 @@ function userTextFingerprint(m: NormalizedMessage): string | null {
   return t.length > 0 ? t : null;
 }
 
-function readMessageTime(m: NormalizedMessage): number | null {
-  const time = Date.parse(m.timestamp);
-  return Number.isFinite(time) ? time : null;
-}
-
 function hasServerEchoForLocalUser(
   localMessage: NormalizedMessage,
   serverMessages: NormalizedMessage[],
@@ -176,15 +173,6 @@ function hasServerEchoForLocalUser(
       && serverTime - localTime <= LOCAL_USER_DEDUPE_WINDOW_MS
     );
   });
-}
-
-function compareMessagesChronologically(a: NormalizedMessage, b: NormalizedMessage): number {
-  const timeA = readMessageTime(a) ?? 0;
-  const timeB = readMessageTime(b) ?? 0;
-  if (timeA !== timeB) {
-    return timeA - timeB;
-  }
-  return 0;
 }
 
 /**
@@ -436,24 +424,6 @@ const MAX_REALTIME_MESSAGES = 500;
  * `refreshFromServer` falls back to a full fetch for that one call.
  */
 const TAIL_REFRESH_LIMIT = 200;
-
-/**
- * Append only the messages from `tail` that aren't already present (by id)
- * in `existing`, preserving `existing`'s earlier history untouched. Used to
- * apply a bounded tail-window response without discarding older pages
- * `fetchMore` already loaded.
- */
-function mergeTailMessages(
-  existing: NormalizedMessage[],
-  tail: NormalizedMessage[],
-): NormalizedMessage[] {
-  const existingIds = new Set(existing.map((message) => message.id));
-  const newMessages = tail.filter((message) => !existingIds.has(message.id));
-  if (newMessages.length === 0) {
-    return existing;
-  }
-  return [...existing, ...newMessages];
-}
 
 // ─── Hook ────────────────────────────────────────────────────────────────────
 
