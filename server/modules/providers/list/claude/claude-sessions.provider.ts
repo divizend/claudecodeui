@@ -1,7 +1,6 @@
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import readline from 'node:readline';
 
 import type { IProviderSessions } from '@/shared/interfaces.js';
 import type { AnyRecord, FetchHistoryOptions, FetchHistoryResult, NormalizedMessage } from '@/shared/types.js';
@@ -9,6 +8,94 @@ import { createNormalizedMessage, generateMessageId, readObjectRecord, sliceTail
 import { sessionsDb } from '@/modules/database/index.js';
 
 const PROVIDER = 'claude';
+
+// ─── Incremental, cached JSONL line reads ───────────────────────────────────
+//
+// getSessionMessages() is invoked on every `/messages` request regardless of
+// the caller's requested limit (fetchHistory always loads full raw history
+// first — see below), including on every filesystem-watcher-triggered
+// refresh while a session is actively being written to. Re-reading and
+// re-JSON.parse-ing the entire transcript (and every referenced subagent
+// file) from byte 0 on each of those calls scales with total session size,
+// not with how much actually changed since the last call. These caches let
+// repeat calls reuse already-parsed lines and only read the bytes appended
+// since the last read.
+
+type LineCacheEntry = {
+  size: number;
+  mtimeMs: number;
+  lines: AnyRecord[];
+  trailingPartialLine: string;
+};
+
+const LINE_CACHE_MAX_ENTRIES = 100;
+const lineCache = new Map<string, LineCacheEntry>();
+
+function touchLineCache(filePath: string, entry: LineCacheEntry): void {
+  // Map preserves insertion order; delete-then-set moves `filePath` to the
+  // most-recently-used end so eviction below drops the least-recently-used.
+  lineCache.delete(filePath);
+  lineCache.set(filePath, entry);
+  while (lineCache.size > LINE_CACHE_MAX_ENTRIES) {
+    const oldestKey = lineCache.keys().next().value;
+    if (oldestKey === undefined) break;
+    lineCache.delete(oldestKey);
+  }
+}
+
+/**
+ * Returns every parsed JSON line of `filePath`, reusing a cached parse when
+ * the file hasn't changed and reading only the newly-appended bytes when it
+ * has grown. Falls back to a full re-read when the file shrank (rotated/
+ * truncated/rewritten) — not expected for Claude's append-only transcripts,
+ * but a stale, wrong cache is worse than an occasional extra full read.
+ */
+async function getCachedLines(filePath: string): Promise<AnyRecord[]> {
+  let stat: { size: number; mtimeMs: number };
+  try {
+    stat = await fsp.stat(filePath);
+  } catch {
+    return [];
+  }
+
+  const cached = lineCache.get(filePath);
+  if (cached && cached.size === stat.size && cached.mtimeMs === stat.mtimeMs) {
+    return cached.lines;
+  }
+
+  const canAppend = Boolean(cached) && stat.size > cached!.size;
+  const readStart = canAppend ? cached!.size : 0;
+  const lines: AnyRecord[] = canAppend ? cached!.lines : [];
+  let buffer = canAppend ? cached!.trailingPartialLine : '';
+
+  await new Promise<void>((resolve, reject) => {
+    const stream = fs.createReadStream(filePath, { start: readStart, encoding: 'utf8' });
+    stream.on('data', (chunk: string | Buffer) => {
+      buffer += chunk;
+      const parts = buffer.split('\n');
+      buffer = parts.pop() ?? '';
+      for (const part of parts) {
+        if (!part.trim()) continue;
+        try {
+          lines.push(JSON.parse(part) as AnyRecord);
+        } catch {
+          // Skip malformed JSONL lines that can happen during concurrent writes.
+        }
+      }
+    });
+    stream.on('end', resolve);
+    stream.on('error', reject);
+  });
+
+  touchLineCache(filePath, {
+    size: stat.size,
+    mtimeMs: stat.mtimeMs,
+    lines,
+    trailingPartialLine: buffer,
+  });
+
+  return lines;
+}
 
 type ClaudeToolResult = {
   content: unknown;
@@ -39,58 +126,44 @@ async function parseAgentTools(filePath: string): Promise<AnyRecord[]> {
   const tools: AnyRecord[] = [];
 
   try {
-    const fileStream = fs.createReadStream(filePath);
-    const rl = readline.createInterface({
-      input: fileStream,
-      crlfDelay: Infinity,
-    });
+    const entries = await getCachedLines(filePath);
 
-    for await (const line of rl) {
-      if (!line.trim()) {
-        continue;
+    for (const entry of entries) {
+      if (entry.message?.role === 'assistant' && Array.isArray(entry.message?.content)) {
+        for (const part of entry.message.content as AnyRecord[]) {
+          if (part.type === 'tool_use') {
+            tools.push({
+              toolId: part.id,
+              toolName: part.name,
+              toolInput: part.input,
+              timestamp: entry.timestamp,
+            });
+          }
+        }
       }
 
-      try {
-        const entry = JSON.parse(line) as AnyRecord;
-
-        if (entry.message?.role === 'assistant' && Array.isArray(entry.message?.content)) {
-          for (const part of entry.message.content as AnyRecord[]) {
-            if (part.type === 'tool_use') {
-              tools.push({
-                toolId: part.id,
-                toolName: part.name,
-                toolInput: part.input,
-                timestamp: entry.timestamp,
-              });
-            }
+      if (entry.message?.role === 'user' && Array.isArray(entry.message?.content)) {
+        for (const part of entry.message.content as AnyRecord[]) {
+          if (part.type !== 'tool_result') {
+            continue;
           }
-        }
 
-        if (entry.message?.role === 'user' && Array.isArray(entry.message?.content)) {
-          for (const part of entry.message.content as AnyRecord[]) {
-            if (part.type !== 'tool_result') {
-              continue;
-            }
+          const tool = tools.find((candidate) => candidate.toolId === part.tool_use_id);
+          if (!tool) {
+            continue;
+          }
 
-            const tool = tools.find((candidate) => candidate.toolId === part.tool_use_id);
-            if (!tool) {
-              continue;
-            }
-
-            tool.toolResult = {
-              content: typeof part.content === 'string'
+          tool.toolResult = {
+            content: typeof part.content === 'string'
+              ? part.content
+              : Array.isArray(part.content)
                 ? part.content
-                : Array.isArray(part.content)
-                  ? part.content
-                    .map((contentPart: AnyRecord) => contentPart?.text || '')
-                    .join('\n')
-                  : JSON.stringify(part.content),
-              isError: Boolean(part.is_error),
-            };
-          }
+                  .map((contentPart: AnyRecord) => contentPart?.text || '')
+                  .join('\n')
+                : JSON.stringify(part.content),
+            isError: Boolean(part.is_error),
+          };
         }
-      } catch {
-        // Skip malformed lines that can happen during concurrent writes.
       }
     }
   } catch (error) {
@@ -120,29 +193,10 @@ async function getSessionMessages(
     const files = await fsp.readdir(projectDir);
     const agentFiles = files.filter((file) => file.endsWith('.jsonl') && file.startsWith('agent-'));
 
-    const messages: AnyRecord[] = [];
     const agentToolsCache = new Map<string, AnyRecord[]>();
 
-    const fileStream = fs.createReadStream(jsonLPath);
-    const rl = readline.createInterface({
-      input: fileStream,
-      crlfDelay: Infinity,
-    });
-
-    for await (const line of rl) {
-      if (!line.trim()) {
-        continue;
-      }
-
-      try {
-        const entry = JSON.parse(line) as AnyRecord;
-        if (entry.sessionId === providerSessionId) {
-          messages.push(entry);
-        }
-      } catch {
-        // Skip malformed JSONL lines that can happen during concurrent writes.
-      }
-    }
+    const allEntries = await getCachedLines(jsonLPath);
+    const messages = allEntries.filter((entry) => entry.sessionId === providerSessionId);
 
     const agentIds = new Set<string>();
     for (const message of messages) {

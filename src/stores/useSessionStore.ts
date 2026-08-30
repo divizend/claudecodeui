@@ -425,6 +425,36 @@ const STALE_THRESHOLD_MS = 30_000;
 
 const MAX_REALTIME_MESSAGES = 500;
 
+/**
+ * `refreshFromServer` is triggered by a filesystem-watcher event every time
+ * the session's transcript changes on disk (e.g. an agent actively working
+ * appends to it). Requesting the newest TAIL_REFRESH_LIMIT messages instead
+ * of the entire transcript keeps that request cheap regardless of how large
+ * the transcript has grown. Sized generously above what a single turn's
+ * worth of tool calls should ever append between two debounced watcher
+ * ticks; if the transcript grew by more than this in one tick anyway (rare),
+ * `refreshFromServer` falls back to a full fetch for that one call.
+ */
+const TAIL_REFRESH_LIMIT = 200;
+
+/**
+ * Append only the messages from `tail` that aren't already present (by id)
+ * in `existing`, preserving `existing`'s earlier history untouched. Used to
+ * apply a bounded tail-window response without discarding older pages
+ * `fetchMore` already loaded.
+ */
+function mergeTailMessages(
+  existing: NormalizedMessage[],
+  tail: NormalizedMessage[],
+): NormalizedMessage[] {
+  const existingIds = new Set(existing.map((message) => message.id));
+  const newMessages = tail.filter((message) => !existingIds.has(message.id));
+  if (newMessages.length === 0) {
+    return existing;
+  }
+  return [...existing, ...newMessages];
+}
+
 // ─── Hook ────────────────────────────────────────────────────────────────────
 
 export function useSessionStore() {
@@ -613,28 +643,24 @@ export function useSessionStore() {
 
   /**
    * Re-fetch serverMessages from the provider sessions endpoint.
+   *
+   * Requests only the newest TAIL_REFRESH_LIMIT messages rather than the
+   * entire transcript — this is called on every watcher-detected disk
+   * change, which for an actively-working session can be every couple of
+   * seconds, and re-downloading (and server-side re-parsing) the whole
+   * transcript on each of those ticks scales with total session size
+   * instead of with how much actually changed. Falls back to a full fetch
+   * only when the tail window provably missed something (more messages
+   * appeared since the last fetch than the window covers).
    */
   const refreshFromServer = useCallback(async (
     sessionId: string,
   ) => {
     const slot = getSlot(sessionId);
     const fetchTicket = ++slot._fetchSeq;
-    try {
-      const url = `/api/providers/sessions/${encodeURIComponent(sessionId)}/messages`;
-      const response = await authenticatedFetch(url);
+    const knownTotal = slot.total;
 
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const body = await response.json();
-      const data = body?.data ?? body;
-
-      // A later-started fetch already applied: applying this stale transcript
-      // would erase rows the user has already seen (and re-prune realtime
-      // rows against an outdated snapshot).
-      if (fetchTicket <= slot._appliedFetchSeq) {
-        return;
-      }
-      slot._appliedFetchSeq = fetchTicket;
-
+    const applyServerSnapshot = (data: { messages?: NormalizedMessage[]; total?: number; hasMore?: boolean }) => {
       slot.serverMessages = data.messages || [];
       slot.total = data.total ?? slot.serverMessages.length;
       slot.hasMore = Boolean(data.hasMore);
@@ -647,6 +673,53 @@ export function useSessionStore() {
         slot.realtimeMessages,
       );
       recomputeMergedIfNeeded(slot);
+    };
+
+    try {
+      const params = new URLSearchParams();
+      params.append('limit', String(TAIL_REFRESH_LIMIT));
+      params.append('offset', '0');
+      const url = `/api/providers/sessions/${encodeURIComponent(sessionId)}/messages?${params.toString()}`;
+      const response = await authenticatedFetch(url);
+
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const body = await response.json();
+      const data = body?.data ?? body;
+      const newTotal = data.total ?? 0;
+
+      // The tail window didn't cover everything appended since the last
+      // fetch (rare — would need >TAIL_REFRESH_LIMIT new messages inside one
+      // debounce tick): fall back to the unbounded history exactly once.
+      if (knownTotal > 0 && newTotal - knownTotal > TAIL_REFRESH_LIMIT) {
+        const fullUrl = `/api/providers/sessions/${encodeURIComponent(sessionId)}/messages`;
+        const fullResponse = await authenticatedFetch(fullUrl);
+        if (!fullResponse.ok) throw new Error(`HTTP ${fullResponse.status}`);
+        const fullBody = await fullResponse.json();
+        const fullData = fullBody?.data ?? fullBody;
+
+        if (fetchTicket <= slot._appliedFetchSeq) return;
+        slot._appliedFetchSeq = fetchTicket;
+        applyServerSnapshot(fullData);
+        notify(sessionId);
+        return;
+      }
+
+      // A later-started fetch already applied: applying this stale transcript
+      // would erase rows the user has already seen (and re-prune realtime
+      // rows against an outdated snapshot).
+      if (fetchTicket <= slot._appliedFetchSeq) {
+        return;
+      }
+      slot._appliedFetchSeq = fetchTicket;
+
+      applyServerSnapshot({
+        ...data,
+        messages: mergeTailMessages(slot.serverMessages, data.messages || []),
+        // The tail request's own `hasMore` reflects pagination within the
+        // tail window, not whether older history (already loaded via
+        // fetchMore) is still available — preserve what we already know.
+        hasMore: slot.hasMore,
+      });
       notify(sessionId);
     } catch (error) {
       console.error(`[SessionStore] refresh failed for ${sessionId}:`, error);
