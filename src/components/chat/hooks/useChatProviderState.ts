@@ -15,9 +15,13 @@ import {
   FALLBACK_PROVIDER_EFFORT_VALUES,
   toProviderEffortOptions,
 } from '../constants/providerEffort';
+import { resolveInitialProviderModel } from '../../../stores/providerModelDefaults';
 
 const FALLBACK_DEFAULT_MODEL: Record<LLMProvider, string> = {
-  claude: 'default',
+  // divizend: this box's operator-standing default — the exact API model id
+  // pinned in cloud-admin-box's ~/.claude/settings.json, not a generic 'fable'
+  // alias that could silently drift to a different snapshot later.
+  claude: 'claude-fable-5-1',
   cursor: 'gpt-5.3-codex',
   codex: 'gpt-5.4',
   opencode: 'anthropic/claude-sonnet-4-5',
@@ -95,7 +99,7 @@ export function useChatProviderState({ selectedSession, selectedProject: _select
     return localStorage.getItem('cursor-model') || FALLBACK_DEFAULT_MODEL.cursor;
   });
   const [claudeModel, setClaudeModel] = useState<string>(() => {
-    return localStorage.getItem('claude-model') || FALLBACK_DEFAULT_MODEL.claude;
+    return resolveInitialProviderModel(localStorage.getItem('claude-model'), FALLBACK_DEFAULT_MODEL.claude);
   });
   const [codexModel, setCodexModel] = useState<string>(() => {
     return localStorage.getItem('codex-model') || FALLBACK_DEFAULT_MODEL.codex;

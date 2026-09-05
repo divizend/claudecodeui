@@ -31,9 +31,13 @@ export const CLAUDE_FALLBACK_MODELS: ProviderModelsDefinition = {
       },
     },
     {
-      value: 'fable',
+      // divizend: the box's own operator-standing default (see cloud-admin-box's
+      // CLAUDE.md) pins the exact API model id, not a generic 'fable' alias that
+      // could silently drift to a different snapshot later — this value is also
+      // what CLAUDE_FALLBACK_MODELS.DEFAULT below points at.
+      value: 'claude-fable-5-1',
       label: 'Fable',
-      description: 'Fable 5 · Most capable for your hardest and longest-running tasks · Uses your limits ~2× faster than Opus',
+      description: 'Fable 5.1 · Most capable for your hardest and longest-running tasks · Uses your limits ~2× faster than Opus',
       effort: {
         default: 'high',
         values: [
@@ -113,7 +117,7 @@ export const CLAUDE_FALLBACK_MODELS: ProviderModelsDefinition = {
   // 'default' (~Sonnet) — see cloud-admin-box's CLAUDE.md model-pin note. The 'default'
   // OPTION entry above is untouched, so explicitly picking "Default (recommended)" from
   // the model picker still behaves as upstream intended.
-  DEFAULT: 'fable',
+  DEFAULT: 'claude-fable-5-1',
 };
 
 export const findClaudeModelOption = (model: string | undefined | null): ProviderModelOption | null => {
