@@ -15,13 +15,14 @@ import {
   FALLBACK_PROVIDER_EFFORT_VALUES,
   toProviderEffortOptions,
 } from '../constants/providerEffort';
-import { resolveInitialProviderModel } from '../../../stores/providerModelDefaults';
+import { normalizeStoredProviderModel, resolveInitialProviderModel } from '../../../stores/providerModelDefaults';
 
 const FALLBACK_DEFAULT_MODEL: Record<LLMProvider, string> = {
-  // divizend: this box's operator-standing default — the exact API model id
-  // pinned in cloud-admin-box's ~/.claude/settings.json, not a generic 'fable'
-  // alias that could silently drift to a different snapshot later.
-  claude: 'claude-fable-5-1',
+  // divizend: this box's operator-standing default by exact API model id (not
+  // an alias that could drift, and not upstream's 'default' literal, which the
+  // backend's own fallback never gets a chance to override). Must match
+  // CLAUDE_FALLBACK_MODELS.DEFAULT server-side.
+  claude: 'claude-sonnet-5',
   cursor: 'gpt-5.3-codex',
   codex: 'gpt-5.4',
   opencode: 'anthropic/claude-sonnet-4-5',
@@ -288,7 +289,9 @@ export function useChatProviderState({ selectedSession, selectedProject: _select
     current: string,
     def: ProviderModelsDefinition,
   ): string => {
-    const stored = localStorage.getItem(storageKey);
+    // Only an explicit prior pick counts — a persisted fallback sentinel must
+    // not pin the user to a default this app has since moved away from.
+    const stored = normalizeStoredProviderModel(localStorage.getItem(storageKey));
     if (stored && def.OPTIONS.some((o) => o.value === stored)) {
       return stored;
     }
@@ -368,7 +371,14 @@ export function useChatProviderState({ selectedSession, selectedProject: _select
       if (next !== claudeModel) {
         setClaudeModel(next);
       }
-      if (localStorage.getItem('claude-model') !== next) {
+      // Persist only explicit picks (setStoredProviderModel/selectProviderModel
+      // write those directly). Writing the resolved *fallback* here is what
+      // used to freeze every browser on whatever the default happened to be
+      // at first load, so a fallback-only state clears the key instead.
+      const explicit = normalizeStoredProviderModel(localStorage.getItem('claude-model'));
+      if (explicit === null) {
+        localStorage.removeItem('claude-model');
+      } else if (explicit !== next) {
         localStorage.setItem('claude-model', next);
       }
     }

@@ -31,10 +31,9 @@ export const CLAUDE_FALLBACK_MODELS: ProviderModelsDefinition = {
       },
     },
     {
-      // divizend: the box's own operator-standing default (see cloud-admin-box's
-      // CLAUDE.md) pins the exact API model id, not a generic 'fable' alias that
-      // could silently drift to a different snapshot later — this value is also
-      // what CLAUDE_FALLBACK_MODELS.DEFAULT below points at.
+      // divizend: exact API model id rather than a generic 'fable' alias that
+      // could silently drift to a different snapshot later. Selectable, but no
+      // longer the default (see DEFAULT below) — it burns tokens far faster.
       value: 'claude-fable-5-1',
       label: 'Fable',
       description: 'Fable 5.1 · Most capable for your hardest and longest-running tasks · Uses your limits ~2× faster than Opus',
@@ -50,9 +49,11 @@ export const CLAUDE_FALLBACK_MODELS: ProviderModelsDefinition = {
       },
     },
     {
-      value: "sonnet",
-      label: "Sonnet",
-      description: "Sonnet 4.6 · Best for everyday tasks · $3/$15 per Mtok",
+      // divizend: exact API model id (same principle as the Fable entry); this is
+      // what CLAUDE_FALLBACK_MODELS.DEFAULT below points at.
+      value: 'claude-sonnet-5',
+      label: 'Sonnet',
+      description: 'Sonnet 5 · Best for everyday tasks',
       effort: {
         default: 'high',
         values: [
@@ -113,11 +114,12 @@ export const CLAUDE_FALLBACK_MODELS: ProviderModelsDefinition = {
       description: 'Haiku 4.5 · Fastest for quick answers · $1/$5 per Mtok',
     },
   ],
-  // divizend: this box's operator-standing default is Fable, not upstream's plain
-  // 'default' (~Sonnet) — see cloud-admin-box's CLAUDE.md model-pin note. The 'default'
-  // OPTION entry above is untouched, so explicitly picking "Default (recommended)" from
-  // the model picker still behaves as upstream intended.
-  DEFAULT: 'claude-fable-5-1',
+  // divizend: this box's operator-standing default is Sonnet 5 by its exact API id
+  // (was Fable for part of 2026-09-05 — reverted the same day: it ate tokens far too
+  // fast). Not upstream's 'default' literal, which resolves independently of any
+  // settings.json pin. The 'default' OPTION entry above is untouched, so explicitly
+  // picking "Default (recommended)" from the picker still behaves as upstream intended.
+  DEFAULT: 'claude-sonnet-5',
 };
 
 export const findClaudeModelOption = (model: string | undefined | null): ProviderModelOption | null => {
