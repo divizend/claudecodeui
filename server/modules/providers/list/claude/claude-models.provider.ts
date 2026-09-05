@@ -109,7 +109,11 @@ export const CLAUDE_FALLBACK_MODELS: ProviderModelsDefinition = {
       description: 'Haiku 4.5 · Fastest for quick answers · $1/$5 per Mtok',
     },
   ],
-  DEFAULT: 'default',
+  // divizend: this box's operator-standing default is Fable, not upstream's plain
+  // 'default' (~Sonnet) — see cloud-admin-box's CLAUDE.md model-pin note. The 'default'
+  // OPTION entry above is untouched, so explicitly picking "Default (recommended)" from
+  // the model picker still behaves as upstream intended.
+  DEFAULT: 'fable',
 };
 
 export const findClaudeModelOption = (model: string | undefined | null): ProviderModelOption | null => {
