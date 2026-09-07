@@ -13,9 +13,9 @@ import {
   buildDefaultProviderCurrentActiveModel,
   writeProviderSessionActiveModelChange,
 } from '@/shared/utils.js';
+import { DEFAULT_CLAUDE_MODEL_ENV, resolveDefaultClaudeModel } from './default-claude-model.js';
 
-export const CLAUDE_FALLBACK_MODELS: ProviderModelsDefinition = {
-  OPTIONS: [
+const BASE_CLAUDE_MODEL_OPTIONS: ProviderModelOption[] = [
     {
       value: 'default',
       label: 'Default (recommended)',
@@ -49,8 +49,7 @@ export const CLAUDE_FALLBACK_MODELS: ProviderModelsDefinition = {
       },
     },
     {
-      // divizend: exact API model id (same principle as the Fable entry); this is
-      // what CLAUDE_FALLBACK_MODELS.DEFAULT below points at.
+      // divizend: exact API model id, not a generic alias that could drift.
       value: 'claude-sonnet-5',
       label: 'Sonnet',
       description: 'Sonnet 5 · Best for everyday tasks',
@@ -113,13 +112,24 @@ export const CLAUDE_FALLBACK_MODELS: ProviderModelsDefinition = {
       label: 'Haiku',
       description: 'Haiku 4.5 · Fastest for quick answers · $1/$5 per Mtok',
     },
-  ],
-  // divizend: this box's operator-standing default is Sonnet 5 by its exact API id
-  // (was Fable for part of 2026-09-05 — reverted the same day: it ate tokens far too
-  // fast). Not upstream's 'default' literal, which resolves independently of any
-  // settings.json pin. The 'default' OPTION entry above is untouched, so explicitly
-  // picking "Default (recommended)" from the picker still behaves as upstream intended.
-  DEFAULT: 'claude-sonnet-5',
+];
+
+// divizend: the default is not a constant in this file any more — it comes from
+// cloud-admin-box's `cloud-admin-box-claude-model` Secret via
+// CLOUDCLI_DEFAULT_CLAUDE_MODEL (baked-in fallback: claude-sonnet-5). The 'default'
+// OPTION entry above is untouched, so explicitly picking "Default (recommended)"
+// still behaves as upstream intended.
+const resolvedDefault = resolveDefaultClaudeModel(
+  process.env[DEFAULT_CLAUDE_MODEL_ENV],
+  BASE_CLAUDE_MODEL_OPTIONS,
+);
+if (resolvedDefault.warning) {
+  console.warn(`[Claude models] ${resolvedDefault.warning}`);
+}
+
+export const CLAUDE_FALLBACK_MODELS: ProviderModelsDefinition = {
+  OPTIONS: resolvedDefault.options,
+  DEFAULT: resolvedDefault.defaultModel,
 };
 
 export const findClaudeModelOption = (model: string | undefined | null): ProviderModelOption | null => {
