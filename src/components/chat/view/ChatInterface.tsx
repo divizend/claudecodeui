@@ -66,6 +66,7 @@ function ChatInterface({
     cursorModel,
     setCursorModel,
     claudeModel,
+    claudeExplicitModel,
     setClaudeModel,
     codexModel,
     setCodexModel,
@@ -200,6 +201,7 @@ function ChatInterface({
     cyclePermissionMode,
     cursorModel,
     claudeModel,
+    claudeExplicitModel,
     codexModel,
     currentProviderEffort,
     opencodeModel,
@@ -225,6 +227,9 @@ function ChatInterface({
   // `chat_subscribed` ack restores or clears the activity indicator, replays
   // missed live events, and re-attaches a still-running stream to this socket.
   const handleWebSocketReconnect = useCallback(async () => {
+    // A default-model switch rollout-restarts the box; the reconnect is the
+    // moment to pick up the new catalog DEFAULT (bypass the client cache).
+    void hardRefreshProviderModels();
     if (!selectedProject || !selectedSession) return;
     await sessionStore.refreshFromServer(selectedSession.id);
     statusCheckSentAtRef.current.set(selectedSession.id, Date.now());
@@ -235,7 +240,7 @@ function ChatInterface({
         lastSeq: lastSeqRef.current.get(selectedSession.id) ?? 0,
       }],
     });
-  }, [selectedProject, selectedSession, sendMessage, sessionStore]);
+  }, [hardRefreshProviderModels, selectedProject, selectedSession, sendMessage, sessionStore]);
 
   useChatRealtimeHandlers({
     subscribe,

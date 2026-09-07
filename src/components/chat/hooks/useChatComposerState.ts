@@ -43,6 +43,7 @@ interface UseChatComposerStateArgs {
   resolvePermissionModeForProvider: (provider: LLMProvider, requestedMode: PermissionMode | string) => PermissionMode;
   cursorModel: string;
   claudeModel: string;
+  claudeExplicitModel: string | null;
   codexModel: string;
   currentProviderEffort: string;
   opencodeModel: string;
@@ -195,6 +196,7 @@ export function useChatComposerState({
   resolvePermissionModeForProvider,
   cursorModel,
   claudeModel,
+  claudeExplicitModel,
   codexModel,
   currentProviderEffort,
   opencodeModel,
@@ -621,7 +623,7 @@ export function useChatComposerState({
           ? codexModel
           : provider === 'opencode'
             ? opencodeModel
-            : claudeModel;
+            : claudeExplicitModel ?? undefined; // Claude: server DEFAULT unless explicitly picked
 
     return {
       model,
@@ -632,7 +634,7 @@ export function useChatComposerState({
       sessionSummary: getNotificationSessionSummary(selectedSession, currentInput),
     };
   }, [
-    claudeModel,
+    claudeExplicitModel,
     codexModel,
     currentProviderEffort,
     cursorModel,

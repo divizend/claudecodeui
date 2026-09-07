@@ -13,6 +13,7 @@ import {
   buildDefaultProviderCurrentActiveModel,
   writeProviderSessionActiveModelChange,
 } from '@/shared/utils.js';
+
 import { DEFAULT_CLAUDE_MODEL_ENV, resolveDefaultClaudeModel } from './default-claude-model.js';
 
 const BASE_CLAUDE_MODEL_OPTIONS: ProviderModelOption[] = [

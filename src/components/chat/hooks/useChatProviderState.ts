@@ -15,14 +15,13 @@ import {
   FALLBACK_PROVIDER_EFFORT_VALUES,
   toProviderEffortOptions,
 } from '../constants/providerEffort';
-import { normalizeStoredProviderModel, resolveInitialProviderModel } from '../../../stores/providerModelDefaults';
+import {
+  nextExplicitClaudeModel,
+  normalizeStoredProviderModel,
+  resolveDisplayedClaudeModel,
+} from '../../../stores/providerModelDefaults';
 
-const FALLBACK_DEFAULT_MODEL: Record<LLMProvider, string> = {
-  // divizend: this box's operator-standing default by exact API model id (not
-  // an alias that could drift, and not upstream's 'default' literal, which the
-  // backend's own fallback never gets a chance to override). Must match
-  // CLAUDE_FALLBACK_MODELS.DEFAULT server-side.
-  claude: 'claude-sonnet-5',
+const FALLBACK_DEFAULT_MODEL: Record<Exclude<LLMProvider, 'claude'>, string> = {
   cursor: 'gpt-5.3-codex',
   codex: 'gpt-5.4',
   opencode: 'anthropic/claude-sonnet-4-5',
@@ -99,8 +98,10 @@ export function useChatProviderState({ selectedSession, selectedProject: _select
   const [cursorModel, setCursorModel] = useState<string>(() => {
     return localStorage.getItem('cursor-model') || FALLBACK_DEFAULT_MODEL.cursor;
   });
-  const [claudeModel, setClaudeModel] = useState<string>(() => {
-    return resolveInitialProviderModel(localStorage.getItem('claude-model'), FALLBACK_DEFAULT_MODEL.claude);
+  // Explicit user pick only (null = follow the server's default). Legacy
+  // persisted-fallback sentinels are filtered out on read.
+  const [claudeExplicitModel, setClaudeExplicitModelState] = useState<string | null>(() => {
+    return normalizeStoredProviderModel(localStorage.getItem('claude-model'));
   });
   const [codexModel, setCodexModel] = useState<string>(() => {
     return localStorage.getItem('codex-model') || FALLBACK_DEFAULT_MODEL.codex;
@@ -137,10 +138,21 @@ export function useChatProviderState({ selectedSession, selectedProject: _select
 
   const providerModelsRequestIdRef = useRef(0);
 
+  const claudeCatalogDefault = providerModelCatalog.claude?.DEFAULT;
+  const claudeModel = useMemo(
+    () => resolveDisplayedClaudeModel(claudeExplicitModel, claudeCatalogDefault),
+    [claudeExplicitModel, claudeCatalogDefault],
+  );
+
   const setStoredProviderModel = useCallback((targetProvider: LLMProvider, model: string) => {
     if (targetProvider === 'claude') {
-      setClaudeModel(model);
-      localStorage.setItem('claude-model', model);
+      const next = nextExplicitClaudeModel(model, claudeCatalogDefault);
+      setClaudeExplicitModelState(next);
+      if (next === null) {
+        localStorage.removeItem('claude-model');
+      } else {
+        localStorage.setItem('claude-model', next);
+      }
       return;
     }
 
@@ -158,7 +170,7 @@ export function useChatProviderState({ selectedSession, selectedProject: _select
 
     setOpenCodeModel(model);
     localStorage.setItem('opencode-model', model);
-  }, []);
+  }, [claudeCatalogDefault]);
 
   const setStoredProviderEffort = useCallback((targetProvider: LLMProvider, effort: string) => {
     setProviderEfforts((previous) => (
@@ -365,24 +377,16 @@ export function useChatProviderState({ selectedSession, selectedProject: _select
   }), [claudeModel, cursorModel, codexModel, opencodeModel]);
 
   useEffect(() => {
+    // Only validate an explicit pick against the catalog; never write a
+    // fallback into localStorage (that is what used to freeze browsers on a
+    // stale default — see providerModelDefaults.ts).
     const claude = providerModelCatalog.claude;
-    if (claude) {
-      const next = pickStoredOrCurrent('claude-model', claudeModel, claude);
-      if (next !== claudeModel) {
-        setClaudeModel(next);
-      }
-      // Persist only explicit picks (setStoredProviderModel/selectProviderModel
-      // write those directly). Writing the resolved *fallback* here is what
-      // used to freeze every browser on whatever the default happened to be
-      // at first load, so a fallback-only state clears the key instead.
-      const explicit = normalizeStoredProviderModel(localStorage.getItem('claude-model'));
-      if (explicit === null) {
-        localStorage.removeItem('claude-model');
-      } else if (explicit !== next) {
-        localStorage.setItem('claude-model', next);
-      }
+    if (!claude || claudeExplicitModel === null) return;
+    if (!claude.OPTIONS.some((option) => option.value === claudeExplicitModel)) {
+      setClaudeExplicitModelState(null);
+      localStorage.removeItem('claude-model');
     }
-  }, [providerModelCatalog.claude, claudeModel]);
+  }, [providerModelCatalog.claude, claudeExplicitModel]);
 
   useEffect(() => {
     const cursor = providerModelCatalog.cursor;
@@ -578,7 +582,8 @@ export function useChatProviderState({ selectedSession, selectedProject: _select
     cursorModel,
     setCursorModel,
     claudeModel,
-    setClaudeModel,
+    claudeExplicitModel,
+    setClaudeModel: (model: string) => setStoredProviderModel('claude', model),
     codexModel,
     setCodexModel,
     currentProviderEffort,

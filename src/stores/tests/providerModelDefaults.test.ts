@@ -1,31 +1,32 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { normalizeStoredProviderModel, resolveInitialProviderModel } from '../providerModelDefaults';
+import {
+  nextExplicitClaudeModel,
+  normalizeStoredProviderModel,
+  resolveDisplayedClaudeModel,
+} from '../providerModelDefaults';
 
-test('resolveInitialProviderModel falls through to the fallback when nothing is stored', () => {
-  assert.equal(resolveInitialProviderModel(null, 'claude-sonnet-5'), 'claude-sonnet-5');
-  assert.equal(resolveInitialProviderModel(undefined, 'claude-sonnet-5'), 'claude-sonnet-5');
-  assert.equal(resolveInitialProviderModel('', 'claude-sonnet-5'), 'claude-sonnet-5');
-});
-
-test('a cached literal "default" is a persisted fallback, not a pick, and gets the new fallback', () => {
-  // Reproduces the 2026-09-05 morning bug: browsers that loaded the app while
-  // the fallback was 'default' had that literal persisted, and a plain
-  // `stored || fallback` never picked up a later fallback change for them.
-  assert.equal(resolveInitialProviderModel('default', 'claude-sonnet-5'), 'claude-sonnet-5');
-});
-
-test('a cached "claude-fable-5-1" is likewise a persisted fallback and gets the new fallback', () => {
-  // Reproduces the mirror-image trap from the same afternoon: the reconcile
-  // effect persisted the Fable fallback into every browser, so reverting the
-  // constant alone would have left them all stuck on Fable.
-  assert.equal(resolveInitialProviderModel('claude-fable-5-1', 'claude-sonnet-5'), 'claude-sonnet-5');
+test('normalizeStoredProviderModel: absent/empty and persisted-fallback sentinels are "no preference"', () => {
+  assert.equal(normalizeStoredProviderModel(null), null);
+  assert.equal(normalizeStoredProviderModel(''), null);
+  // 'default' (upstream fallback literal) and 'claude-fable-5-1' (this box's fallback for
+  // part of 2026-09-05) were written into localStorage by the app itself, never picked.
+  assert.equal(normalizeStoredProviderModel('default'), null);
   assert.equal(normalizeStoredProviderModel('claude-fable-5-1'), null);
+  assert.equal(normalizeStoredProviderModel('opus'), 'opus');
 });
 
-test('an explicit prior model choice is preserved', () => {
-  assert.equal(resolveInitialProviderModel('opus', 'claude-sonnet-5'), 'opus');
-  assert.equal(resolveInitialProviderModel('haiku', 'claude-sonnet-5'), 'haiku');
-  assert.equal(normalizeStoredProviderModel('opus'), 'opus');
+test('resolveDisplayedClaudeModel: explicit pick wins, else catalog default, else empty', () => {
+  assert.equal(resolveDisplayedClaudeModel('opus', 'claude-sonnet-5'), 'opus');
+  assert.equal(resolveDisplayedClaudeModel(null, 'claude-sonnet-5'), 'claude-sonnet-5');
+  assert.equal(resolveDisplayedClaudeModel(null, undefined), '');
+});
+
+test('nextExplicitClaudeModel: picking the catalog default clears the explicit pick', () => {
+  // A browser that picks "the default" should follow future switches, not freeze on
+  // whatever the default happened to be today.
+  assert.equal(nextExplicitClaudeModel('claude-sonnet-5', 'claude-sonnet-5'), null);
+  assert.equal(nextExplicitClaudeModel('opus', 'claude-sonnet-5'), 'opus');
+  assert.equal(nextExplicitClaudeModel('opus', undefined), 'opus');
 });

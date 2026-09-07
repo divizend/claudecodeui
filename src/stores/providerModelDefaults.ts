@@ -34,14 +34,25 @@ export function normalizeStoredProviderModel(stored: string | null | undefined):
 }
 
 /**
- * Resolves the initial model value for a provider from a (possibly absent)
- * localStorage-cached value: an explicit prior pick wins, anything else falls
- * through to `fallback` — so a browser holding only a stale persisted
- * fallback picks up a new one without any manual action.
+ * What the composer shows/uses: an explicit pick, else the server catalog's
+ * DEFAULT, else '' while the catalog is still loading. The frontend never has a
+ * default of its own — see cloud-admin-box's
+ * docs/superpowers/specs/2026-09-05-runtime-default-claude-model-design.md §3.
  */
-export function resolveInitialProviderModel(
-  stored: string | null | undefined,
-  fallback: string,
+export function resolveDisplayedClaudeModel(
+  explicit: string | null,
+  catalogDefault: string | null | undefined,
 ): string {
-  return normalizeStoredProviderModel(stored) ?? fallback;
+  return explicit ?? catalogDefault ?? '';
+}
+
+/**
+ * Picking the entry that *is* the catalog default means "follow the default", so
+ * the explicit pick is cleared rather than pinned to today's value.
+ */
+export function nextExplicitClaudeModel(
+  picked: string,
+  catalogDefault: string | null | undefined,
+): string | null {
+  return picked === catalogDefault ? null : picked;
 }
